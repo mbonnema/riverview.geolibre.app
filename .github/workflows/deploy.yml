@@ -77,6 +77,19 @@ jobs:
           # <root>/apps/geolibre-desktop/public/plugins/<id>/.
           npm run install:geolibre -- --web "$GITHUB_WORKSPACE/geolibre"
 
+      - name: Activate the plugin on startup
+        run: |
+          # Honored only for bundled drop-ins, so it is set here rather than in
+          # the plugin repo (where it would be rejected for URL/zip installs).
+          # A project's saved plugin state still overrides it.
+          node -e '
+            const fs = require("node:fs");
+            const f = process.argv[1];
+            const m = JSON.parse(fs.readFileSync(f, "utf8"));
+            m.activeByDefault = true;
+            fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
+          ' geolibre/apps/geolibre-desktop/public/plugins/riverview/plugin.json
+
       - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
