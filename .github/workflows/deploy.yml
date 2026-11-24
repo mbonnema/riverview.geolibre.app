@@ -1,0 +1,142 @@
+name: Deploy riverview.geolibre.app
+
+# Builds GeoLibre with the Riverview plugin bundled in and publishes it to
+# GitHub Pages. Two repositories go into one build:
+#   opengeos/GeoLibre                    the app
+#   mbonnema/riverview-visualization-plugin   the plugin, copied into the app's
+#                                        bundled drop-in folder before the build
+# This repository holds only this workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      geolibre_ref:
+        description: opengeos/GeoLibre ref to build (branch, tag, or SHA)
+        default: main
+      plugin_ref:
+        description: riverview-visualization-plugin ref to build
+        default: main
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: riverview-deploy
+  cancel-in-progress: true
+
+env:
+  # Served from a project URL, https://<user>.github.io/<repo>/. Drop this (and
+  # use a CNAME) if you move to a custom domain at the root.
+  GEOLIBRE_APP_BASE: /riverview.geolibre.app/
+  # Default input set the plugin opens with. Replaces the config bundled with
+  # the plugin so the 300 MB of sample data is not shipped with the site.
+  RIVERVIEW_CONFIG_URL: https://storage.googleapis.com/riverview-geolibre/basin73/riverview.config.json
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout opengeos/GeoLibre
+        uses: actions/checkout@v7
+        with:
+          repository: opengeos/GeoLibre
+          ref: ${{ inputs.geolibre_ref || 'main' }}
+          path: geolibre
+          persist-credentials: false
+
+      - name: Checkout the Riverview plugin
+        uses: actions/checkout@v7
+        with:
+          repository: mbonnema/riverview-visualization-plugin
+          ref: ${{ inputs.plugin_ref || 'main' }}
+          path: plugin
+          # The plugin repo is private: needs a fine-grained PAT with read
+          # access to Contents on that repository.
+          token: ${{ secrets.PLUGIN_REPO_TOKEN }}
+          persist-credentials: false
+
+      - name: Record what was built
+        id: built
+        run: |
+          echo "geolibre=$(git -C geolibre rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "plugin=$(git -C plugin rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: lts/*
+          cache: npm
+          cache-dependency-path: geolibre/package-lock.json
+
+      - name: Build the plugin and install it into GeoLibre
+        working-directory: plugin
+        run: |
+          npm ci
+          # Builds the GeoLibre bundle, then copies it to
+          # <root>/apps/geolibre-desktop/public/plugins/<id>/.
+          npm run install:geolibre -- --web "$GITHUB_WORKSPACE/geolibre"
+
+      - name: Point the plugin at the hosted data
+        env:
+          URL: ${{ env.RIVERVIEW_CONFIG_URL }}
+        run: |
+          dir=geolibre/apps/geolibre-desktop/public/plugins/riverview
+          [ -f "$dir/plugin.json" ] || { echo "::error::Plugin not installed at $dir"; exit 1; }
+          rm -rf "$dir/dist/data"
+          # Fetched at build time so the relative paths become absolute and the
+          # site never depends on files bundled with the plugin.
+          node -e '
+            const url = process.argv[1];
+            fetch(url).then(r => { if (!r.ok) throw new Error(url + " " + r.status); return r.json(); }).then(c => {
+              const abs = p => new URL(p, url).href;
+              c.rivers.shp = abs(c.rivers.shp);
+              c.rivers.dbf = abs(c.rivers.dbf ?? c.rivers.shp.replace(/\.shp$/i, ".dbf"));
+              c.discharge = abs(c.discharge);
+              require("node:fs").writeFileSync(process.argv[2], JSON.stringify(c, null, 2));
+              console.log(c);
+            }).catch(e => { console.error("::error::" + e.message); process.exit(1); });
+          ' "$URL" "$dir/dist/riverview.config.json"
+
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+
+      - name: Install the JupyterLite build dependencies
+        # Without these the Vite build only warns and ships a site whose
+        # Notebook panel cannot load.
+        run: pip install -r geolibre/apps/geolibre-desktop/jupyterlite/requirements.txt
+
+      - name: Install GeoLibre dependencies
+        working-directory: geolibre
+        run: npm ci
+
+      - name: Build the web app
+        working-directory: geolibre
+        # No Clerk key, so no sign-in gate; no AI URL, so no assistant.
+        run: npm run build
+
+      - name: Verify the plugin and JupyterLite are in the build
+        working-directory: geolibre/apps/geolibre-desktop/dist
+        run: |
+          [ -f plugins/riverview/plugin.json ] || { echo "::error::Riverview plugin missing from build output."; exit 1; }
+          [ -f jupyterlite/index.html ] || { echo "::error::JupyterLite site missing from build output."; exit 1; }
+          touch .nojekyll
+          echo "Built site: $(du -sm . | cut -f1) MB (GeoLibre ${{ steps.built.outputs.geolibre }}, plugin ${{ steps.built.outputs.plugin }})"
+
+      - uses: actions/upload-pages-artifact@v4
+        with:
+          path: geolibre/apps/geolibre-desktop/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
