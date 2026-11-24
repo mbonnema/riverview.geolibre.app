@@ -26,8 +26,8 @@ No sign-in gate and no AI assistant.
 Redeploys are not triggered by changes in the two source repos; re-run the
 workflow (optionally pinning `geolibre_ref` / `plugin_ref`).
 
-## Default data
+## Inputs
 
-`RIVERVIEW_CONFIG_URL` in the workflow is the config the plugin opens with
-(currently basin 73 in the bucket). Per-basin projects can use other configs via
-Riverview > Select inputs, or `?riverview_config=<url>`.
+The site ships no default data. Choose inputs from Riverview > Select inputs,
+or open a saved GeoLibre project (which records its config URL), or use
+`?riverview_config=<url>`.

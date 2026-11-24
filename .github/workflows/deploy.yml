@@ -32,9 +32,6 @@ env:
   # Served from a project URL, https://<user>.github.io/<repo>/. Drop this (and
   # use a CNAME) if you move to a custom domain at the root.
   GEOLIBRE_APP_BASE: /riverview.geolibre.app/
-  # Default input set the plugin opens with. Replaces the config bundled with
-  # the plugin so the 300 MB of sample data is not shipped with the site.
-  RIVERVIEW_CONFIG_URL: https://storage.googleapis.com/riverview-geolibre/basin73/riverview.config.json
 
 jobs:
   build:
@@ -79,27 +76,6 @@ jobs:
           # Builds the GeoLibre bundle, then copies it to
           # <root>/apps/geolibre-desktop/public/plugins/<id>/.
           npm run install:geolibre -- --web "$GITHUB_WORKSPACE/geolibre"
-
-      - name: Point the plugin at the hosted data
-        env:
-          URL: ${{ env.RIVERVIEW_CONFIG_URL }}
-        run: |
-          dir=geolibre/apps/geolibre-desktop/public/plugins/riverview
-          [ -f "$dir/plugin.json" ] || { echo "::error::Plugin not installed at $dir"; exit 1; }
-          rm -rf "$dir/dist/data"
-          # Fetched at build time so the relative paths become absolute and the
-          # site never depends on files bundled with the plugin.
-          node -e '
-            const url = process.argv[1];
-            fetch(url).then(r => { if (!r.ok) throw new Error(url + " " + r.status); return r.json(); }).then(c => {
-              const abs = p => new URL(p, url).href;
-              c.rivers.shp = abs(c.rivers.shp);
-              c.rivers.dbf = abs(c.rivers.dbf ?? c.rivers.shp.replace(/\.shp$/i, ".dbf"));
-              c.discharge = abs(c.discharge);
-              require("node:fs").writeFileSync(process.argv[2], JSON.stringify(c, null, 2));
-              console.log(c);
-            }).catch(e => { console.error("::error::" + e.message); process.exit(1); });
-          ' "$URL" "$dir/dist/riverview.config.json"
 
       - uses: actions/setup-python@v7
         with:
